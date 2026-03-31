@@ -1,28 +1,21 @@
 import type React from "react"
 import type { Metadata } from "next"
 import { Inter } from "next/font/google"
-import "./globals.css"
-import "@/styles/globals.css"
+import "@/app/globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
+import { cn } from "@/lib/utils"
 import { Toaster } from "@/components/ui/toaster"
 import { AuthProvider } from "@/contexts/auth-context"
+import { NetworkProvider } from "@/contexts/network-context"
+import CacheStatus from "@/components/cache-status"
+import OfflineGate from "@/components/offline-gate"
 
 const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "Aahaar - Food Court Management System",
+  title: "Aahaar",
   description: "Complete SaaS solution for Food court management",
   manifest: "/app-manifest.json",
-  viewport: {
-    width: 'device-width',
-    initialScale: 1,
-    maximumScale: 1,
-    userScalable: false,
-  },
-  themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#ffffff' },
-    { media: '(prefers-color-scheme: dark)', color: '#0a0a0a' }
-  ],
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',
@@ -30,7 +23,7 @@ export const metadata: Metadata = {
   },
   openGraph: {
     type: 'website',
-    title: 'Aahaar - Food Ordering App',
+    title: 'Aahaar',
     description: 'Order food from your favorite food court vendors',
     siteName: 'Aahaar'
   },
@@ -43,6 +36,17 @@ export const metadata: Metadata = {
   }
 }
 
+export const viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#ffffff' },
+    { media: '(prefers-color-scheme: dark)', color: '#0a0a0a' }
+  ]
+}
+
 export default function RootLayout({
   children,
 }: {
@@ -52,10 +56,14 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className={`${inter.className} overflow-x-hidden w-full max-w-full touch-manipulation`} style={{ touchAction: 'manipulation' }}>
         <ThemeProvider attribute="class" defaultTheme="dark" disableTransitionOnChange>
-          <AuthProvider>
-            {children}
-            <Toaster />
-          </AuthProvider>
+          <NetworkProvider>
+            <AuthProvider>
+              <OfflineGate />
+              <CacheStatus />
+              {children}
+              <Toaster />
+            </AuthProvider>
+          </NetworkProvider>
         </ThemeProvider>
       </body>
     </html>

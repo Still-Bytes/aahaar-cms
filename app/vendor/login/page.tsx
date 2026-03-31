@@ -2,10 +2,11 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { AnimatedButton } from "@/components/ui/animated-button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -14,43 +15,54 @@ import { useVendorAuth } from "@/contexts/vendor-auth-context"
 
 export default function VendorLogin() {
   const router = useRouter()
-  const { login } = useVendorAuth()
+  const { login, isAuthenticated, loading: authLoading, user } = useVendorAuth()
 
-  const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
-  const [courtId, setCourtId] = useState("")
-  
-  // Check if we're in development mode
-  const isDevelopment = process.env.NODE_ENV === 'development'
-  
-  // Test vendor credentials for development
-  const testVendorCredentials = {
-    courtId: "democourt",
-    email: "parthmethi@gmail.com",
-    password: "password123"
+
+  // Redirect to dashboard if already authenticated
+  useEffect(() => {
+    if (!authLoading && isAuthenticated && user) {
+      console.log("🔄 [VendorLogin] Vendor already authenticated, redirecting to dashboard")
+      router.push(`/vendor/${user.courtId}`)
+    }
+  }, [isAuthenticated, authLoading, user, router])
+
+  // Show loading while checking authentication
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-black flex items-center justify-center p-4">
+        <div className="flex items-center space-x-2">
+          <Loader2 className="h-6 w-6 animate-spin" />
+          <span>Checking authentication...</span>
+        </div>
+      </div>
+    )
   }
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!email || !password || !courtId) {
+  // Don't render login form if already authenticated (will redirect)
+  if (isAuthenticated) {
+    return null
+  }
+
+  const handleLogin = async (e: React.MouseEvent<HTMLButtonElement>): Promise<boolean> => {
+    if (!email || !password) {
       setError("Please fill in all fields")
-      return
+      return false
     }
 
-    setLoading(true)
     setError("")
 
     try {
-      console.log("🚀 Attempting login with:", { email, courtId, hasPassword: !!password })
+      console.log("🚀 Attempting login with:", { email, hasPassword: !!password })
       
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ email, password, courtId }),
+        body: JSON.stringify({ email, password }),
       }).then(res => res.json())
 
       console.log("📥 Login response:", response)
@@ -59,13 +71,15 @@ export default function VendorLogin() {
         const userData = response.data.user
         if (userData.role !== "vendor") {
           setError("Access denied. Vendor account required.")
-          return
+          return false
         }
 
         login(response.data.token, userData)
-        router.push(`/vendor/${courtId}`)
+        router.push(`/vendor/${userData.courtId}`)
+        return true
       } else {
         setError(response.message || "Invalid credentials")
+        return false
       }
     } catch (error: any) {
       console.error("❌ Login error:", error)
@@ -77,59 +91,7 @@ export default function VendorLogin() {
       } else {
         setError("Login failed. Please check your credentials and try again.")
       }
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleTestVendorLogin = async () => {
-    setLoading(true)
-    setError("")
-
-    try {
-      console.log("🚀 Attempting test vendor login with:", { 
-        email: testVendorCredentials.email, 
-        courtId: testVendorCredentials.courtId, 
-        hasPassword: !!testVendorCredentials.password 
-      })
-      
-      const response = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          email: testVendorCredentials.email,
-          password: testVendorCredentials.password,
-          courtId: testVendorCredentials.courtId,
-        }),
-      }).then(res => res.json())
-
-      console.log("📥 Test vendor login response:", response)
-
-      if (response.success) {
-        const userData = response.data.user
-        if (userData.role !== "vendor") {
-          setError("Access denied. Vendor account required.")
-          return
-        }
-
-        login(response.data.token, userData)
-        router.push(`/vendor/${testVendorCredentials.courtId}`)
-      } else {
-        setError(response.message || "Invalid test credentials")
-      }
-    } catch (error: any) {
-      console.error("❌ Test vendor login error:", error)
-      if (error.message) {
-        setError(error.message)
-      } else if (typeof error === 'string') {
-        setError(error)
-      } else {
-        setError("Test login failed. Please try again.")
-      }
-    } finally {
-      setLoading(false)
+      return false
     }
   }
 
@@ -138,7 +100,7 @@ export default function VendorLogin() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gray-50 dark:bg-black flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         <div className="mb-6">
           <Button variant="ghost" onClick={goHome} className="mb-4">
@@ -156,17 +118,7 @@ export default function VendorLogin() {
             <CardDescription>Sign in to manage your stall and orders</CardDescription>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="courtId">Court ID</Label>
-                <Input
-                  id="courtId"
-                  type="text"
-                  placeholder="Enter court ID (e.g., vbs-ghamroj)"
-                  value={courtId}
-                  onChange={(e) => setCourtId(e.target.value)}
-                />
-              </div>
+            <div className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
                 <Input
@@ -185,37 +137,22 @@ export default function VendorLogin() {
                   placeholder="Enter your password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const button = document.getElementById('login-button') as HTMLButtonElement
+                      button?.click()
+                    }
+                  }}
                 />
               </div>
-              <Button type="submit" className="w-full" disabled={loading}>
-                {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              <AnimatedButton 
+                id="login-button"
+                onAsyncClick={handleLogin} 
+                className="w-full"
+              >
                 Sign In
-              </Button>
-            </form>
-
-            {/* Test Vendor Login Button - Only in Development */}
-            {isDevelopment && (
-              <div className="mt-4">
-                <div className="relative">
-                  <div className="absolute inset-0 flex items-center">
-                    <span className="w-full border-t border-gray-300" />
-                  </div>
-                  <div className="relative flex justify-center text-xs uppercase">
-                    <span className="bg-white px-2 text-gray-500">Development Only</span>
-                  </div>
-                </div>
-                <Button 
-                  type="button" 
-                  variant="outline" 
-                  className="w-full mt-4" 
-                  onClick={handleTestVendorLogin}
-                  disabled={loading}
-                >
-                  {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Login as Test Vendor
-                </Button>
-              </div>
-            )}
+              </AnimatedButton>
+            </div>
 
             {error && (
               <Alert className="mt-4" variant="destructive">
@@ -223,7 +160,7 @@ export default function VendorLogin() {
               </Alert>
             )}
 
-            <div className="mt-6 text-center text-sm text-gray-600">
+            <div className="mt-6 text-center text-sm text-gray-600 dark:text-gray-400">
               <p>Don't have access? Contact your food court admin.</p>
             </div>
           </CardContent>

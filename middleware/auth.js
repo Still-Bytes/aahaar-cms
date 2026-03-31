@@ -1,11 +1,26 @@
 const jwt = require("jsonwebtoken")
 const { NextResponse } = require("next/server")
-const { User, Court } = require("../models")
+const { User, Court, Vendor } = require("../models")
+
+// Ensure environment variables are loaded
+if (typeof window === 'undefined') {
+  require('dotenv').config()
+}
 
 const authenticateToken = async (request) => {
   try {
     const authHeader = request.headers.get("authorization")
-    const token = authHeader && authHeader.split(" ")[1]
+
+    // Try to extract token - handle both "Bearer <token>" and just "<token>" formats
+    let token
+    if (authHeader) {
+      if (authHeader.startsWith("Bearer ")) {
+        token = authHeader.split(" ")[1]
+      } else {
+        // Fallback: use the entire header as token (in case Bearer prefix is missing)
+        token = authHeader
+      }
+    }
 
     if (!token) {
       return NextResponse.json({
@@ -14,7 +29,31 @@ const authenticateToken = async (request) => {
       }, { status: 401 })
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET)
+    // Use JWT_SECRET from env or fallback for development
+    const jwtSecret = process.env.JWT_SECRET || 'fallback-secret-for-dev'
+
+    let decoded
+    try {
+      decoded = jwt.verify(token, jwtSecret)
+    } catch (jwtError) {
+      if (jwtError.name === "JsonWebTokenError") {
+        return NextResponse.json({
+          success: false,
+          message: "Invalid token format",
+        }, { status: 401 })
+      }
+      if (jwtError.name === "TokenExpiredError") {
+        return NextResponse.json({
+          success: false,
+          message: "Token expired",
+        }, { status: 401 })
+      }
+
+      return NextResponse.json({
+        success: false,
+        message: "Token verification failed",
+      }, { status: 401 })
+    }
 
     // Fetch user with court information
     const user = await User.findByPk(decoded.userId, {
@@ -23,6 +62,12 @@ const authenticateToken = async (request) => {
           model: Court,
           as: "court",
           attributes: ["courtId", "instituteName", "status"],
+        },
+        {
+          model: Vendor,
+          as: "vendorProfile",
+          attributes: ["id", "status"],
+          required: false,
         },
       ],
     })
@@ -41,6 +86,16 @@ const authenticateToken = async (request) => {
       }, { status: 401 })
     }
 
+    // For vendor users, also check vendor status
+    if (user.role === "vendor" && user.vendorProfile) {
+      if (user.vendorProfile.status !== "active") {
+        return NextResponse.json({
+          success: false,
+          message: "Vendor account is not active. Please contact your admin.",
+        }, { status: 401 })
+      }
+    }
+
     if (user.court && user.court.status !== "active") {
       return NextResponse.json({
         success: false,
@@ -51,7 +106,6 @@ const authenticateToken = async (request) => {
     // Return user data instead of modifying request object
     return { user, courtId: user.courtId }
   } catch (error) {
-    console.error("Auth middleware error:", error)
     
     if (error.name === "JsonWebTokenError") {
       return NextResponse.json({
@@ -93,7 +147,6 @@ const authenticateTokenNextJS = async (request) => {
       courtId: result.courtId
     }
   } catch (error) {
-    console.error("Auth wrapper error:", error)
     return {
       error: "Authentication error",
       status: 500

@@ -43,6 +43,17 @@ interface Vendor {
       name: string
       pan: string
     }
+    paymentStatus?: 'not_requested' | 'requested' | 'approved' | 'rejected'
+    paymentRequestId?: string
+    paymentRejectionReason?: string
+    registeredAddress?: {
+      addressStreet1?: string
+      addressStreet2?: string
+      addressCity?: string
+      addressState?: string
+      addressPostalCode?: string
+      addressCountry?: string
+    }
   }
   createdAt: string
   updatedAt: string
@@ -227,7 +238,7 @@ export default function VendorsPage() {
                 className="gap-2 dark:border-neutral-600 dark:text-neutral-300 dark:hover:bg-neutral-800"
               >
                 {buttonLoading === viewButtonId ? (
-                  <Spinner size={16} variant="dark" />
+                  <Spinner size={16} variant="light" />
                 ) : (
                   <Eye className="h-4 w-4" />
                 )}
@@ -378,13 +389,15 @@ export default function VendorsPage() {
                     ? "No vendors match your current filters."
                     : "Get started by creating your first vendor."}
                 </p>
-                <Button
-                  disabled={buttonLoading === 'create-first-vendor'}
-                  onClick={() => {
-                    setButtonLoading('create-first-vendor')
-                    router.push(`/admin/${courtId}/vendors/onboard`)
-                  }}
-                  className="gap-2 bg-blue-600 hover:bg-blue-700 text-white"
+
+                {!(searchTerm || (statusFilter !== "all")) && (
+                  <Button
+                    disabled={buttonLoading === 'create-first-vendor'}
+                    onClick={() => {
+                      setButtonLoading('create-first-vendor')
+                      router.push(`/admin/${courtId}/vendors/onboard`)
+                    }}
+                    className="gap-2 bg-neutral-400 hover:bg-neutral-300 text-black"
                 >
                   {buttonLoading === 'create-first-vendor' ? (
                     <Spinner size={16} variant="white" />
@@ -393,11 +406,12 @@ export default function VendorsPage() {
                   )}
                   Create First Vendor
                 </Button>
-              </div>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="grid gap-4">
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid gap-4">
             {filteredVendors.map((vendor, index) => (
               <motion.div
                 key={vendor.id}
@@ -413,10 +427,10 @@ export default function VendorsPage() {
       </motion.div>
 
       {/* Pagination */}
-      {pagination.totalPages > 1 && (
+      {!searchTerm && pagination.totalPages > 1 && (
         <div className="flex items-center justify-between">
           <p className="text-sm text-muted-foreground dark:text-neutral-400">
-            Showing {filteredVendors.length} of {pagination.totalItems} vendors
+            Showing {searchTerm ? filteredVendors.length : pagination.totalItems} of {pagination.totalItems} vendors
           </p>
           <div className="flex gap-2">
             <Button

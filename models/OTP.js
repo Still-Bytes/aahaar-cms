@@ -7,7 +7,7 @@ module.exports = (sequelize, DataTypes) => {
     },
     userId: {
       type: DataTypes.UUID,
-      allowNull: false,
+      allowNull: true, // Allow null for new users who don't have accounts yet
       references: {
         model: 'users',
         key: 'id'
@@ -33,6 +33,14 @@ module.exports = (sequelize, DataTypes) => {
     verified: {
       type: DataTypes.BOOLEAN,
       defaultValue: false,
+    },
+    courtId: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      references: {
+        model: 'courts',
+        key: 'courtId'
+      }
     },
     createdAt: {
       type: DataTypes.DATE,

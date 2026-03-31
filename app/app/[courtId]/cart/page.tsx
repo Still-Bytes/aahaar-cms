@@ -1,24 +1,186 @@
 "use client"
-import { use, useEffect, useState } from "react"
+import { use, useEffect, useState, useMemo } from "react"
 import { useCart } from "@/contexts/cart-context"
 import { motion, AnimatePresence } from "framer-motion"
-import { Plus, Minus, Trash2, ArrowRight, MapPin, ArrowLeft } from "lucide-react"
+import { Plus, Minus, Trash2, ArrowRight, MapPin, ArrowLeft, AlertTriangle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerTrigger } from "@/components/ui/drawer"
 import { useAppAuth } from "@/contexts/app-auth-context"
 import Image from "next/image"
 import { useRouter } from "next/navigation"
 import DummyPaymentGateway from "@/components/app/dummy-payment-gateway"
+import { CartItem } from "@/components/app/cart-item"
+import { useCartValidation } from "@/hooks/use-cart-validation"
+
+
+// Type definitions
+interface CartItem {
+  menuItemId: string;
+  name: string;
+  price: number;
+  quantity: number;
+  subtotal: number;
+  vendorId: string;
+  vendorName?: string;
+  imageUrl?: string;
+  customizations?: any;
+}
+
+interface VendorGroup {
+  vendorId: string;
+  vendorName: string;
+  items: any[];
+  totalAmount: number;
+}
+
+// Enhanced transformation function using your fee calculation
+function transformOrderWithFeeCalculation(orderItems: CartItem[]) {
+    // Group items by vendor first
+    const vendorGroups: Record<string, VendorGroup> = {};
+    
+    orderItems.forEach((item: CartItem) => {
+        if (!vendorGroups[item.vendorId]) {
+            vendorGroups[item.vendorId] = {
+                vendorId: item.vendorId,
+                vendorName: item.vendorName || 'Unknown Vendor',
+                items: [],
+                totalAmount: 0
+            };
+        }
+        
+        const itemTotal = item.price * item.quantity;
+        vendorGroups[item.vendorId].items.push({
+            itemId: item.menuItemId,
+            itemName: item.name,
+            price: item.price * 100, // Convert to paise
+            quantity: item.quantity,
+            customizations: item.customizations,
+            imageUrl: item.imageUrl
+        });
+        vendorGroups[item.vendorId].totalAmount += itemTotal;
+    });
+
+    // Calculate vendor amounts for fee calculation
+    const totalAmount = orderItems.reduce((sum: number, item: CartItem) => sum + (item.price * item.quantity), 0);
+    const vendorAmounts = Object.values(vendorGroups).map((group: VendorGroup) => group.totalAmount);
+    
+    // Use your fee calculation logic
+    const feeCalculation = calculateSplit(totalAmount, vendorAmounts);
+    
+    // Create vendors object with account IDs to be populated
+    const vendors: Record<string, any> = {};
+    Object.values(vendorGroups).forEach((group: VendorGroup) => {
+        vendors[group.vendorId] = {
+            name: group.vendorName,
+            accountId: null, // To be populated from database
+            originalAmount: group.totalAmount * 100, // Convert to paise
+            deduction: (group.totalAmount * 0.03) * 100, // 3% deduction in paise
+            finalPayout: (group.totalAmount * 0.97) * 100 // Final payout in paise
+        };
+    });
+
+    // Transform all items for Route compatibility
+    const transformedItems: any[] = [];
+    Object.values(vendorGroups).forEach((group: VendorGroup) => {
+        transformedItems.push(...group.items);
+    });
+
+    return {
+        vendors,
+        items: transformedItems,
+        feeBreakdown: feeCalculation,
+        baseAmount: totalAmount * 100, // in paise
+        customerPayable: parseFloat(feeCalculation.totals.customerPays) * 100, // in paise
+        platformRevenue: parseFloat(feeCalculation.totals.platformKeeps) * 100, // in paise
+        razorpayFee: parseFloat(feeCalculation.totals.razorpayFee) * 100 // in paise
+    };
+}
+
+// Your existing fee calculation function (unchanged)
+const RAZORPAY_FEE_RATE = 0.02;
+const GST_RATE = 0.18;
+const PLATFORM_DEDUCTION_RATE = 0.06;
+
+function calculateSplit(totalAmount: number, vendorAmounts: number[]) {
+    const razorpayFee = totalAmount * RAZORPAY_FEE_RATE;
+    const razorpayFeeWithGST = razorpayFee * (1 + GST_RATE);
+    
+    const totalDeduction = totalAmount * PLATFORM_DEDUCTION_RATE;
+    const customerPay = totalAmount * (1 + PLATFORM_DEDUCTION_RATE / 2);
+    
+    const vendorPayouts = vendorAmounts.map((amount: number) => {
+        const deduction = amount * (PLATFORM_DEDUCTION_RATE / 2);
+        return {
+            vendorAmount: amount,
+            deduction,
+            payout: amount - deduction
+        };
+    });
+    
+    const platformShare = totalDeduction - razorpayFeeWithGST;
+    
+    const customerBill = {
+        baseAmount: totalAmount,
+        platformCharge: totalAmount * (PLATFORM_DEDUCTION_RATE / 2),
+        totalPayable: customerPay
+    };
+    
+    const vendorBills = vendorPayouts.map((bill, i: number) => ({
+        Vendor: `Vendor ${i + 1}`,
+        Item_Value: `₹${bill.vendorAmount.toFixed(2)}`,
+        Deduction: `₹${bill.deduction.toFixed(2)}`,
+        Final_Payout: `₹${bill.payout.toFixed(2)}`
+    }));
+    
+    return {
+        totals: {
+            totalAmount,
+            customerPays: customerPay.toFixed(2),
+            razorpayFee: razorpayFeeWithGST.toFixed(2),
+            platformKeeps: platformShare.toFixed(2)
+        },
+        customerBill: {
+            Base_Price: `₹${customerBill.baseAmount.toFixed(2)}`,
+            Platform_Charge: `₹${customerBill.platformCharge.toFixed(2)}`,
+            Total_Payable: `₹${customerBill.totalPayable.toFixed(2)}`
+        },
+    vendorBills: vendorPayouts.map((bill, i: number) => ({
+      Vendor: `Vendor ${i + 1}`,
+      Item_Value: `₹${bill.vendorAmount.toFixed(2)}`,
+      Deduction: `₹${bill.deduction.toFixed(2)}`,
+      Final_Payout: `₹${bill.payout.toFixed(2)}`
+    }))
+    };
+}
 
 export default function CartPage({ params }: { params: Promise<{ courtId: string }> }) {
   const { courtId } = use(params)
-  const { cart, updateQuantity, removeFromCart, isLoading, hasActiveOrder, activeOrderError, checkActiveOrders } = useCart()
+  const { cart, isLoading, hasActiveOrder, activeOrderError, checkActiveOrders, clearCart } = useCart()
   const { user, token } = useAppAuth()
+  const { isCartValid, hasInvalidItems, validateCart, getItemIssues, isItemValid } = useCartValidation(courtId)
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
   const [showPaymentGateway, setShowPaymentGateway] = useState(false)
   const [orderData, setOrderData] = useState<any>(null)
   const [checkoutLoading, setCheckoutLoading] = useState(false)
+  const [removedItems, setRemovedItems] = useState<Set<string>>(new Set())
+  const [paymentSuccess, setPaymentSuccess] = useState(false)
+  const [transformedOrder, setTransformedOrder] = useState<any>(null)
   const router = useRouter()
+
+  // Memoized transformed order preview (used to show accurate to-pay amount)
+  const transformedOrderPreview = useMemo(() => {
+    try {
+      return transformOrderWithFeeCalculation(cart.items || [])
+    } catch (e) {
+      console.error('Error computing transformed order preview', e)
+      return null
+    }
+  }, [cart.items])
+
+  // customerPayable in rupees when available; fallback to undefined so UI can choose totalAmount later
+  const customerPayableRupees = transformedOrderPreview?.customerPayable ? transformedOrderPreview.customerPayable / 100 : undefined
+
+  // Total to pay will be computed after totalAmount is known (see below)
 
   // Page transition variants
   const pageVariants = {
@@ -41,19 +203,24 @@ export default function CartPage({ params }: { params: Promise<{ courtId: string
     }
   }, [user, token, courtId, router])
 
-  // Check for active orders when cart page loads
+  // Show payment gateway when payment is successful
   useEffect(() => {
-    if (user && token) {
-      checkActiveOrders()
+    if (paymentSuccess && orderData) {
+      setShowPaymentGateway(true)
     }
-  }, [user, token, checkActiveOrders])
+  }, [paymentSuccess, orderData])
 
   // Calculate charges
   const itemTotal = cart.total
-  const gst = itemTotal * 0.18 // 18% GST
   const serviceCharge = itemTotal * 0.05 // 5% Service Charge
   const platformCharge = 5 // ₹5 Platform Charge
-  const totalAmount = itemTotal + gst + serviceCharge + platformCharge
+  // GST is pre-included in menu item prices
+  const totalAmount = itemTotal + serviceCharge + platformCharge
+
+  // Total to pay = customerPayable + platform fee + razorpay charge (all stored in paise in preview)
+  const toPayTotalRupees = transformedOrderPreview
+    ? ((transformedOrderPreview.customerPayable || 0) + (transformedOrderPreview.platformRevenue || 0) + (transformedOrderPreview.razorpayFee || 0)) / 100
+    : totalAmount
 
   // Get unique vendor names from cart items
   const uniqueVendorNames = [...new Set(cart.items.map(item => item.vendorName).filter(Boolean))]
@@ -61,16 +228,9 @@ export default function CartPage({ params }: { params: Promise<{ courtId: string
     ? `Picking up at ${uniqueVendorNames.join(', ')}`
     : 'No vendors selected'
 
-  const handleQuantityChange = async (menuItemId: string, newQuantity: number) => {
-    if (newQuantity <= 0) {
-      await removeFromCart(menuItemId)
-    } else {
-      await updateQuantity(menuItemId, newQuantity)
-    }
-  }
-
-  const handleRemoveItem = async (menuItemId: string) => {
-    await removeFromCart(menuItemId)
+  const handleRemoveItem = (menuItemId: string) => {
+    // Add to removed items to hide from UI while backend sync happens
+    setRemovedItems(prev => new Set([...prev, menuItemId]))
   }
 
   const handleBackNavigation = () => {
@@ -80,6 +240,45 @@ export default function CartPage({ params }: { params: Promise<{ courtId: string
   const handleCheckout = async () => {
     if (!user || !token) return
 
+    console.table(cart)
+
+    // Transform cart items with fee calculation (initial creation)
+    let transformedOrder = transformOrderWithFeeCalculation(cart.items)
+    
+    // Log all vendor details for vendors in the current cart
+    const vendorIds = [...new Set(cart.items.map(item => item.vendorId))]
+    if (vendorIds.length > 0) {
+      try {
+        const vendorResponse = await fetch(`/api/app/${courtId}/vendors?ids=${vendorIds.join(',')}`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        })
+        const vendorData = await vendorResponse.json()
+        
+        if (vendorData.success) {
+          console.log('All vendor details for current cart:', JSON.stringify(vendorData.data.vendors, null, 2))
+          
+          // Update transformedOrder with razorpayAccountId from fetched vendor data
+          vendorIds.forEach(vendorId => {
+            const vendor = vendorData.data.vendors.find((v: any) => v.id === vendorId)
+            if (vendor && transformedOrder.vendors[vendorId]) {
+              transformedOrder.vendors[vendorId].accountId = vendor.razorpayAccountId || null
+            }
+          })
+          console.log('Updated transformedOrder with razorpayAccountId:', transformedOrder)
+        } else {
+          console.log('Failed to fetch vendor details:', vendorData)
+        }
+      } catch (error) {
+        console.error('Error fetching vendor details:', error)
+      }
+    }
+
+    // Set the final transformed order (with or without vendor account IDs)
+    setTransformedOrder(transformedOrder)
+    console.table(transformedOrder)
+
     // Check for active orders before proceeding
     if (hasActiveOrder) {
       alert(activeOrderError || "You have an active order. Please wait for it to complete before placing a new order.")
@@ -88,6 +287,54 @@ export default function CartPage({ params }: { params: Promise<{ courtId: string
 
     setCheckoutLoading(true)
     try {
+      // Validate cart items before proceeding with checkout
+      console.log("🔍 Validating cart items...")
+      const validationResponse = await fetch(`/api/app/${courtId}/cart/validate`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      })
+
+      const validationData = await validationResponse.json()
+      
+      if (!validationResponse.ok) {
+        console.error("Cart validation failed:", validationData.message)
+        alert(validationData.message || "Failed to validate cart items. Please try again.")
+        return
+      }
+
+      if (!validationData.valid) {
+        console.error("Cart has invalid items:", validationData)
+        
+        // Create detailed error message
+        let errorMessage = "Some items in your cart are no longer available:\n\n"
+        
+        if (validationData.summary.offlineVendors.length > 0) {
+          errorMessage += `🔴 Offline Vendors: ${validationData.summary.offlineVendors.join(", ")}\n`
+        }
+        
+        if (validationData.summary.unavailableItems.length > 0) {
+          errorMessage += `❌ Unavailable Items: ${validationData.summary.unavailableItems.join(", ")}\n`
+        }
+        
+        if (validationData.summary.stockIssues.length > 0) {
+          errorMessage += `📦 Stock Issues:\n`
+          validationData.summary.stockIssues.forEach((issue: any) => {
+            errorMessage += `   • ${issue.name}: Only ${issue.available} available (you requested ${issue.requested})\n`
+          })
+        }
+        
+        errorMessage += "\nPlease remove these items or wait for vendors to come back online."
+        
+        alert(errorMessage)
+        return
+      }
+
+      console.log("✅ Cart validation passed, proceeding with checkout...")
+      
+      // Proceed with checkout if validation passes
       const response = await fetch(`/api/app/${courtId}/checkout`, {
         method: "POST",
         headers: {
@@ -100,30 +347,236 @@ export default function CartPage({ params }: { params: Promise<{ courtId: string
         }),
       })
 
-      if (response.ok) {
-        const data = await response.json()
-        if (data.success) {
-          setOrderData(data.data)
-          setShowPaymentGateway(true)
-        } else {
-          console.error("Checkout failed:", data.message)
-          alert(data.message || "Checkout failed. Please try again.")
-        }
-      } else {
-        const errorData = await response.json()
-        console.error("Checkout request failed:", response.status, errorData.message)
-        alert(errorData.message || "Checkout failed. Please try again.")
-        
-        // If it's an active order error, refresh the active order check
-        if (response.status === 400 && errorData.message?.includes("active order")) {
+      const data = await response.json()
+      if (!response.ok) {
+        console.error("Checkout request failed:", response.status, data.message)
+        alert(data.message || "Checkout failed. Please try again.")
+        if (response.status === 400 && data.message?.includes("active order")) {
           await checkActiveOrders()
         }
+        return
       }
+
+      if (!data.success) {
+        console.error("Checkout failed:", data.message)
+        alert(data.message || "Checkout failed. Please try again.")
+        return
+      }
+
+      // Save order data locally
+      setOrderData(data.data)
+
+      // If server returned razorpay order info, open Razorpay Checkout
+      if (data.data?.razorpayOrderId) {
+        try {
+          await loadRazorpayScript()
+          await openRazorpayCheckout({
+            razorpayOrderId: data.data.razorpayOrderId,
+            amount: data.data.razorpayOrderAmount,
+            localOrderId: data.data?.orders?.[0]?.id || data.data?.orders?.[0]?.orderNumber || data.data?.parentOrderId,
+            transformedOrder,
+            orderData: data.data,
+          })
+          // Payment success will be handled by the state change in the handler
+        } catch (err) {
+          console.error("Payment failed or cancelled:", err)
+          alert("Payment failed or cancelled")
+        }
+      } else {
+        // Fallback to existing dummy gateway behavior
+        setShowPaymentGateway(true)
+      }
+
     } catch (error) {
       console.error("Checkout error:", error)
+      alert("Checkout error. Please try again.")
     } finally {
       setCheckoutLoading(false)
     }
+  }
+
+  // Load Razorpay SDK script
+  const loadRazorpayScript = () => {
+    return new Promise<void>((resolve, reject) => {
+      if (typeof window === "undefined") return reject(new Error("window is undefined"))
+      if (document.getElementById("razorpay-checkout-script")) return resolve()
+      const script = document.createElement("script")
+      script.id = "razorpay-checkout-script"
+      script.src = "https://checkout.razorpay.com/v1/checkout.js"
+      script.onload = () => resolve()
+      script.onerror = () => reject(new Error("Failed to load Razorpay SDK"))
+      document.body.appendChild(script)
+    })
+  }
+
+  // Open Razorpay Checkout
+  const openRazorpayCheckout = ({ razorpayOrderId, amount, localOrderId, transformedOrder: passedTransformedOrder, orderData: passedOrderData }: { razorpayOrderId: string, amount: number, localOrderId: string, transformedOrder?: any, orderData?: any }) => {
+    return new Promise<void>((resolve, reject) => {
+      if (typeof window === "undefined") return reject(new Error("window is undefined"))
+      const options: any = {
+        key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || (window as any).__RAZORPAY_KEY_ID || "",
+        amount,
+        currency: "INR",
+        name: "Aahaar",
+        description: "Order Payment",
+        order_id: razorpayOrderId,
+        handler: async function (response: any) {
+          try {
+            // Verify payment on server
+            await fetch(`/api/razorpay/verify`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_signature: response.razorpay_signature,
+                localOrderId,
+              }),
+            })
+
+            // Fetch vendor details to get razorpayAccountId and create payout JSON
+            console.log('Checking for payout data:', { transformedOrder: !!passedTransformedOrder, orderData: !!passedOrderData })
+            if (passedTransformedOrder && passedOrderData) {
+              console.log('🔍 [PAYMENT ROUTING] transformedOrder details:', JSON.stringify(passedTransformedOrder, null, 2))
+              console.log('🔍 [PAYMENT ROUTING] orderData details:', JSON.stringify(passedOrderData, null, 2))
+              console.log('transformedOrder:', passedTransformedOrder)
+              console.log('orderData:', passedOrderData)
+              const vendorIds = Object.keys(passedTransformedOrder.vendors)
+              console.log('vendorIds:', vendorIds)
+              const vendorResponse = await fetch(`/api/app/${courtId}/vendors?ids=${vendorIds.join(',')}`, {
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                },
+              })
+              console.log('vendorResponse status:', vendorResponse.status)
+              const vendorData = await vendorResponse.json()
+              console.log('vendorData:', vendorData)
+
+              if (vendorData.success) {
+                console.log('All vendor details from database:', JSON.stringify(vendorData.data.vendors, null, 2))
+
+                // Update transformedOrder with razorpayAccountId
+                const updatedTransformedOrder = { ...passedTransformedOrder }
+                vendorIds.forEach(vendorId => {
+                  const vendor = vendorData.data.vendors.find((v: any) => v.id === vendorId)
+                  if (vendor && updatedTransformedOrder.vendors[vendorId]) {
+                    updatedTransformedOrder.vendors[vendorId].accountId = vendor.razorpayAccountId || null
+                  }
+                })
+                setTransformedOrder(updatedTransformedOrder)
+
+                // Create payout JSON
+                const payoutData = vendorIds.map(vendorId => {
+                  const vendor = vendorData.data.vendors.find((v: any) => v.id === vendorId)
+                  const vendorPayout = updatedTransformedOrder.vendors[vendorId]
+                  return {
+                    vendorId,
+                    razorpayAccountId: vendor?.razorpayAccountId || null,
+                    amount: vendorPayout.finalPayout, // Already in paise
+                  }
+                })
+
+                console.log('Updated transformedOrder with razorpayAccountId:', updatedTransformedOrder)
+                console.log('Vendor Payout JSON:', JSON.stringify(payoutData, null, 2))
+
+                // Create Razorpay transfers to split payment to vendors (only in production)
+                console.log('🚀 [PAYMENT ROUTING] Starting vendor payment distribution process...')
+                if (process.env.NODE_ENV === 'development' && payoutData.some(p => p.razorpayAccountId && p.razorpayAccountId.startsWith('acc_'))) {
+                  console.log('💼 [PAYMENT ROUTING] Production environment detected - proceeding with Razorpay transfers')
+                  try {
+                    const transferData = payoutData
+                      .filter(p => p.razorpayAccountId && p.razorpayAccountId.startsWith('acc_')) // Only include transfers with valid account IDs
+                      .map(payout => ({
+                        account: payout.razorpayAccountId,
+                        amount: payout.amount,
+                        currency: 'INR',
+                        notes: {
+                          vendorId: payout.vendorId,
+                          orderId: localOrderId,
+                        },
+                        linked_account_notes: ['vendorId'],
+                        on_hold: false,
+                      }))
+
+                    console.log('🔄 [PAYMENT ROUTING] Creating Razorpay transfers via Orders API...')
+                    console.log('📊 [PAYMENT ROUTING] Transfer data structure:', JSON.stringify(transferData, null, 2))
+                    console.log('💰 [PAYMENT ROUTING] Total transfer amount:', transferData.reduce((sum, t) => sum + t.amount, 0), 'paise')
+                    console.log('🏪 [PAYMENT ROUTING] Number of vendor transfers:', transferData.length)
+
+                    const transferPayload = {
+                      razorpay_payment_id: response.razorpay_payment_id,
+                      razorpay_order_id: response.razorpay_order_id,
+                      transfers: transferData,
+                    }
+                    console.log('📤 [PAYMENT ROUTING] Payload being sent to transfers API:', JSON.stringify(transferPayload, null, 2))
+
+                    const transfersResponse = await fetch('/api/razorpay/transfers', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${token}`,
+                      },
+                      body: JSON.stringify(transferPayload),
+                    })
+
+                    const transfersResult = await transfersResponse.json()
+                    console.log('✅ [PAYMENT ROUTING] Razorpay transfers API response:', transfersResult)
+
+                    if (!transfersResponse.ok) {
+                      console.error('❌ [PAYMENT ROUTING] Failed to create transfers:', transfersResult)
+                    } else {
+                      console.log('🎉 [PAYMENT ROUTING] Successfully routed payments to all vendors!')
+                      console.log('📈 [PAYMENT ROUTING] Transfer summary:', {
+                        totalAmount: transferData.reduce((sum, t) => sum + t.amount, 0),
+                        vendorCount: transferData.length,
+                        paymentId: response.razorpay_payment_id,
+                        orderId: localOrderId
+                      })
+                    }
+                  } catch (transferError) {
+                    console.error('💥 [PAYMENT ROUTING] Error during transfer creation:', transferError)
+                  }
+                } else {
+                  console.log('⚠️ [PAYMENT ROUTING] Skipping transfers - Environment:', process.env.NODE_ENV, '| Valid accounts found:', payoutData.filter(p => p.razorpayAccountId && p.razorpayAccountId.startsWith('acc_')).length)
+                }
+                console.log('🏁 [PAYMENT ROUTING] Vendor payment distribution process completed')
+              } else {
+                console.log('Vendor API call failed:', vendorData)
+              }
+            } else {
+              console.log('transformedOrder or orderData not available - passedTransformedOrder:', !!passedTransformedOrder, 'passedOrderData:', !!passedOrderData)
+            }
+
+            // Clear the cart after successful payment
+            await clearCart()
+            // Set payment success state to show dummy gateway success page
+            setPaymentSuccess(true)
+            resolve()
+          } catch (err) {
+            reject(err)
+          }
+        },
+        prefill: {
+          name: user?.fullName || "",
+          email: user?.email || "",
+          contact: user?.phone || "",
+        },
+        notes: { localOrderId },
+        theme: { color: "#22c55e" },
+      }
+
+      // Diagnostic log: preview the key used by client (first 8 chars) and NODE_ENV
+      try {
+        // eslint-disable-next-line no-console
+        console.log('Razorpay Checkout - client keyPreview=', (options.key || '').toString().slice(0,8), 'NODE_ENV=', process.env.NODE_ENV)
+      } catch (e) {}
+
+      const rzp = new (window as any).Razorpay(options)
+      rzp.on("payment.failed", function (resp: any) {
+        reject(resp)
+      })
+      rzp.open()
+    })
   }
 
   const handlePaymentComplete = (paymentResult: any) => {
@@ -143,6 +596,7 @@ export default function CartPage({ params }: { params: Promise<{ courtId: string
         courtId={courtId}
         onPaymentComplete={handlePaymentComplete}
         onCancel={handlePaymentCancel}
+        paymentAlreadyComplete={paymentSuccess}
       />
     )
   }
@@ -221,6 +675,28 @@ export default function CartPage({ params }: { params: Promise<{ courtId: string
         </div>
       </motion.div>
 
+      {/* Warning Banner for Invalid Items */}
+      {hasInvalidItems && (
+        <motion.div
+          className="mx-4 mt-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg"
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+        >
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                Cart validation issues detected
+              </p>
+              <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
+                Some items may not be available for checkout. Please review marked items below.
+              </p>
+            </div>
+          </div>
+        </motion.div>
+      )}
+
       {/* Cart Items */}
       <motion.div 
         className="flex-1 px-4 py-4 space-y-4 w-full overflow-y-auto overflow-x-hidden"
@@ -229,119 +705,16 @@ export default function CartPage({ params }: { params: Promise<{ courtId: string
         transition={{ delay: 0.2 }}
       >
         <AnimatePresence mode="popLayout">
-          {cart.items.map((item, index) => (
-            <motion.div
+          {cart.items.filter(item => !removedItems.has(item.menuItemId)).map((item, index) => (
+            <CartItem
               key={item.menuItemId}
-              layout
-              initial={{ opacity: 0, y: 20, scale: 0.95 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ 
-                opacity: 0, 
-                x: -100, 
-                scale: 0.95,
-                transition: { duration: 0.2 }
-              }}
-              transition={{ 
-                delay: index * 0.05,
-                type: "spring",
-                stiffness: 300,
-                damping: 30
-              }}
-              className="bg-white dark:bg-neutral-900 rounded-lg shadow-sm border border-neutral-200 dark:border-neutral-800 p-4 w-full hover:shadow-md dark:hover:shadow-neutral-800/50 transition-shadow"
-            >
-              <div className="flex gap-3 w-full min-w-0">
-                {/* Item Image */}
-                <motion.div 
-                  className="relative w-16 h-16 flex-shrink-0"
-                  whileHover={{ scale: 1.05 }}
-                  transition={{ type: "spring", stiffness: 400 }}
-                >
-                  <Image
-                    src={item.imageUrl || "/placeholder.jpg"}
-                    alt={item.name}
-                    fill
-                    className="object-cover rounded-lg"
-                  />
-                </motion.div>
-
-                {/* Item Details */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex justify-between items-start mb-2 min-w-0">
-                    <div className="flex-1 min-w-0 pr-2">
-                      <h3 className="font-medium text-neutral-900 dark:text-white truncate text-sm">{item.name}</h3>
-                      <p className="text-xs text-neutral-600 dark:text-neutral-400 truncate">
-                        {item.vendorName || 'Unknown Vendor'}
-                      </p>
-                    </div>
-                    <motion.div
-                      whileHover={{ scale: 1.1 }}
-                      whileTap={{ scale: 0.9 }}
-                    >
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleRemoveItem(item.menuItemId)}
-                        className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 p-1 h-auto flex-shrink-0"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </motion.div>
-                  </div>
-
-                  {/* Quantity Controls and Price */}
-                  <div className="flex justify-between items-center w-full">
-                    <motion.div 
-                      className="flex items-center gap-1 bg-neutral-100 dark:bg-neutral-800 rounded-lg p-1 flex-shrink-0"
-                      whileHover={{ scale: 1.02 }}
-                      transition={{ type: "spring", stiffness: 400 }}
-                    >
-                      <motion.div
-                        whileHover={{ scale: 1.1 }}
-                        whileTap={{ scale: 0.9 }}
-                      >
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleQuantityChange(item.menuItemId, item.quantity - 1)}
-                          disabled={isLoading}
-                          className="h-7 w-7 p-0 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300"
-                        >
-                          <Minus className="h-3 w-3" />
-                        </Button>
-                      </motion.div>
-                      <motion.span 
-                        className="mx-1 min-w-[20px] text-center font-medium text-sm text-neutral-900 dark:text-white"
-                        key={item.quantity}
-                        initial={{ scale: 1.2 }}
-                        animate={{ scale: 1 }}
-                        transition={{ type: "spring", stiffness: 500 }}
-                      >
-                        {item.quantity}
-                      </motion.span>
-                      <motion.div
-                        whileHover={{ scale: 1.1 }}
-                        whileTap={{ scale: 0.9 }}
-                      >
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleQuantityChange(item.menuItemId, item.quantity + 1)}
-                          disabled={isLoading}
-                          className="h-7 w-7 p-0 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300"
-                        >
-                          <Plus className="h-3 w-3" />
-                        </Button>
-                      </motion.div>
-                    </motion.div>
-
-                    <div className="text-right flex-shrink-0 ml-2">
-                      <p className="font-semibold text-neutral-900 dark:text-white text-sm">₹{Number(item.subtotal || 0).toFixed(2)}</p>
-                      <p className="text-xs text-neutral-500 dark:text-neutral-400">₹{Number(item.price || 0).toFixed(2)} each</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </motion.div>
+              item={item}
+              index={index}
+              onRemove={handleRemoveItem}
+              isLoading={isLoading}
+              isValid={isItemValid(item.menuItemId)}
+              validationIssues={getItemIssues(item.menuItemId)}
+            />
           ))}
         </AnimatePresence>
       </motion.div>
@@ -362,7 +735,7 @@ export default function CartPage({ params }: { params: Promise<{ courtId: string
             >
               <span className="font-medium">To Pay</span>
               <div className="w-auto flex flex-row gap-2 font-bold">
-                ₹{Number(totalAmount || 0).toFixed(2)}
+                ₹{Number((toPayTotalRupees !== undefined ? toPayTotalRupees : totalAmount) || 0).toFixed(2)}
                 <motion.div
                 animate={{ x: [0, 5, 0] }}
                 transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
@@ -389,17 +762,8 @@ export default function CartPage({ params }: { params: Promise<{ courtId: string
                   animate={{ x: 0, opacity: 1 }}
                   transition={{ delay: 0.1 }}
                 >
-                  <span className="text-neutral-600 dark:text-neutral-400">Item Total</span>
-                  <span className="font-medium text-neutral-900 dark:text-white">₹{Number(itemTotal || 0).toFixed(2)}</span>
-                </motion.div>
-                <motion.div 
-                  className="flex justify-between"
-                  initial={{ x: -20, opacity: 0 }}
-                  animate={{ x: 0, opacity: 1 }}
-                  transition={{ delay: 0.15 }}
-                >
-                  <span className="text-neutral-600 dark:text-neutral-400">GST (18%)</span>
-                  <span className="font-medium text-neutral-900 dark:text-white">₹{Number(gst || 0).toFixed(2)}</span>
+                  <span className="text-neutral-600 dark:text-neutral-400">Item Total (Incl. GST)</span>
+                  <span className="font-medium text-neutral-900 dark:text-white">{transformedOrderPreview ? transformedOrderPreview.feeBreakdown?.customerBill?.Base_Price || `₹${(transformedOrderPreview.baseAmount/100).toFixed(2)}` : `₹${Number(itemTotal || 0).toFixed(2)}`}</span>
                 </motion.div>
                 <motion.div 
                   className="flex justify-between"
@@ -407,27 +771,32 @@ export default function CartPage({ params }: { params: Promise<{ courtId: string
                   animate={{ x: 0, opacity: 1 }}
                   transition={{ delay: 0.2 }}
                 >
-                  <span className="text-neutral-600 dark:text-neutral-400">Service Charge (5%)</span>
-                  <span className="font-medium text-neutral-900 dark:text-white">₹{serviceCharge.toFixed(2)}</span>
+                  <span className="text-neutral-600 dark:text-neutral-400">Service Charge</span>
+                  <span className="font-medium text-neutral-900 dark:text-white">{transformedOrderPreview ? `₹${(transformedOrderPreview.razorpayFee/100).toFixed(2)}` : `₹0.00`}</span>
                 </motion.div>
                 <motion.div 
                   className="flex justify-between"
                   initial={{ x: -20, opacity: 0 }}
                   animate={{ x: 0, opacity: 1 }}
-                  transition={{ delay: 0.25 }}
+                  transition={{ delay: 0.15 }}
                 >
-                  <span className="text-neutral-600 dark:text-neutral-400">Platform Charge</span>
-                  <span className="font-medium text-neutral-900 dark:text-white">₹{platformCharge.toFixed(2)}</span>
+                  <span className="text-neutral-600 dark:text-neutral-400">Platform charges</span>
+                  <span className="font-medium text-neutral-900 dark:text-white">{(() => {
+                    if (!transformedOrderPreview) return `₹${platformCharge.toFixed(2)}`
+                    const customerPlatform = (transformedOrderPreview.customerPayable - transformedOrderPreview.baseAmount) / 100
+                    const platformRevenue = (transformedOrderPreview.platformRevenue || 0) / 100
+                    return `₹${(customerPlatform + platformRevenue).toFixed(2)}`
+                  })()}</span>
                 </motion.div>
                 <motion.div 
                   className="border-t border-neutral-200 dark:border-neutral-700 pt-3"
                   initial={{ scale: 0.95, opacity: 0 }}
                   animate={{ scale: 1, opacity: 1 }}
-                  transition={{ delay: 0.3 }}
+                  transition={{ delay: 0.25 }}
                 >
                   <div className="flex justify-between font-semibold text-lg">
                     <span className="text-neutral-900 dark:text-white">Total Amount</span>
-                    <span className="text-neutral-900 dark:text-white">₹{totalAmount.toFixed(2)}</span>
+                    <span className="text-neutral-900 dark:text-white">₹{(toPayTotalRupees !== undefined ? toPayTotalRupees : totalAmount).toFixed(2)}</span>
                   </div>
                 </motion.div>
               </div>
@@ -498,6 +867,24 @@ export default function CartPage({ params }: { params: Promise<{ courtId: string
                 disabled={true}
               >
                 Checkout Disabled - Active Order
+              </Button>
+            </div>
+          ) : hasInvalidItems ? (
+            <div className="w-full space-y-3">
+              <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3">
+                <div className="text-amber-800 dark:text-amber-200 text-sm font-medium">
+                  ⚠️ Cart Issues Detected
+                </div>
+                <div className="text-amber-700 dark:text-amber-300 text-xs mt-1">
+                  Some items are no longer available. Please remove invalid items to proceed.
+                </div>
+              </div>
+              <Button
+                className="w-full bg-amber-500 hover:bg-amber-600 text-white font-medium py-3 transition-colors"
+                onClick={() => validateCart()}
+                disabled={checkoutLoading}
+              >
+                Re-validate Cart
               </Button>
             </div>
           ) : (

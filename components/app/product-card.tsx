@@ -20,6 +20,11 @@ interface ProductCardProps {
   stockQuantity?: number
   stockUnit?: string
   status?: 'active' | 'inactive' | 'out_of_stock'
+  // Vendor information for optimistic updates
+  vendorId?: string
+  vendorName?: string
+  // Vendor online status
+  isVendorOnline?: boolean
 }
 
 export function ProductCard({
@@ -34,9 +39,12 @@ export function ProductCard({
   hasStock = false,
   stockQuantity = 0,
   stockUnit = "pieces",
-  status = "active"
+  status = "active",
+  vendorId = "",
+  vendorName = "",
+  isVendorOnline = true
 }: ProductCardProps) {
-  const { cart, addToCart, updateQuantity, removeFromCart, isLoading: cartLoading } = useCart()
+  const { cart, addToCartOptimistic, updateQuantityOptimistic, removeFromCartOptimistic, isLoading: cartLoading } = useCart()
   
   // Local state for immediate UI updates
   const [displayQuantity, setDisplayQuantity] = useState(0)
@@ -101,15 +109,15 @@ export function ProductCard({
       if (targetQuantity === 0) {
         // Remove item completely
         console.log(`🗑️ [ProductCard] Removing ${name} from cart`)
-        success = await removeFromCart(id)
+        success = await removeFromCartOptimistic(id)
       } else if (currentQuantity === 0) {
         // Add new item
         console.log(`➕ [ProductCard] Adding ${name} to cart with quantity ${targetQuantity}`)
-        success = await addToCart(id, targetQuantity)
+        success = await addToCartOptimistic(id, name, price, vendorId, vendorName, imageUrl, targetQuantity)
       } else {
         // Update existing item
         console.log(`🔄 [ProductCard] Updating ${name} quantity ${currentQuantity} → ${targetQuantity}`)
-        success = await updateQuantity(id, targetQuantity)
+        success = await updateQuantityOptimistic(id, targetQuantity)
       }
       
       if (success) {
@@ -153,7 +161,7 @@ export function ProductCard({
       isSyncingRef.current = false
       // Don't set isUpdating(false) here to prevent UI flickering
     }
-  }, [cart.items, id, addToCart, updateQuantity, removeFromCart, onAddToCart, name, cartLoading])
+  }, [cart.items, id, addToCartOptimistic, updateQuantityOptimistic, removeFromCartOptimistic, onAddToCart, name, cartLoading, price, vendorId, vendorName, imageUrl])
 
   // Force sync any pending updates (useful for navigation)
   const forceSyncPending = useCallback(() => {
@@ -336,6 +344,11 @@ export function ProductCard({
 
   // Calculate stock status
   const stockStatus = useMemo(() => {
+    // If vendor is offline, override all other statuses
+    if (!isVendorOnline) {
+      return { status: 'vendor_offline', message: 'Vendor Offline', canOrder: false }
+    }
+    
     if (status === 'out_of_stock') {
       return { status: 'out_of_stock', message: 'Out of Stock', canOrder: false }
     }
@@ -365,13 +378,12 @@ export function ProductCard({
       message: `${stockQuantity} ${stockUnit} available`, 
       canOrder: true 
     }
-  }, [hasStock, stockQuantity, stockUnit, status])
+  }, [hasStock, stockQuantity, stockUnit, status, isVendorOnline])
 
   return (
     <motion.div
       className={`bg-white dark:bg-neutral-900 rounded-2xl overflow-hidden shadow-sm border border-neutral-200 dark:border-neutral-800 ${className}`}
       whileHover={{ scale: 1.02 }}
-      whileTap={{ scale: 0.98 }}
       transition={{ type: "spring", stiffness: 400, damping: 25 }}
       data-product-name={name}
       data-price={price}
@@ -414,20 +426,34 @@ export function ProductCard({
       </div>
 
       {/* Content Section */}
-      <div className="p-3 space-y-2">
+      <div className="p-3 space-y-1">
         {/* Title */}
-        <h3 className="font-bold text-[12px] text-black dark:text-white line-clamp-1 truncate">
+        <h2 className="font-bold text-[14px] text-black dark:text-white line-clamp-1 truncate">
           {name}
-        </h3>
+        </h2>
 
-        {/* Description */}
-        <p className="text-[10px] text-neutral-600 dark:text-neutral-400 line-clamp-2 truncate">
-          {description}
-        </p>
+        {/* Description
+        {description && (
+          <p className="text-[10px] text-neutral-600 dark:text-neutral-400 line-clamp-2 truncate">
+            {description}
+          </p>
+        )} */}
+
+        {/* Vendor Name */}
+        {vendorName && (
+          <div className="flex items-center gap-1">
+            <span className="text-[9px] text-neutral-500 dark:text-neutral-400">
+              by
+            </span>
+            <span className="text-[9px] text-neutral-600 dark:text-neutral-300 font-medium truncate">
+              {vendorName}
+            </span>
+          </div>
+        )}
 
         {/* Price Section */}
-        <div className="flex items-center gap-2">
-          <span className="font-bold text-[12px] text-black dark:text-white">
+        <div className="flex items-center pt-2 gap-2">
+          <span className="font-bold text-[16px] text-black dark:text-white">
             ₹{price}
           </span>
           {mrp && mrp > price && (
@@ -448,7 +474,11 @@ export function ProductCard({
         <div className="flex items-center justify-between pt-1">
           {/* Stock Status Display */}
           <div className="text-[10px] text-neutral-500 dark:text-neutral-400">
-            {stockStatus.status === 'out_of_stock' ? (
+            {stockStatus.status === 'vendor_offline' ? (
+              <span className="text-amber-600 dark:text-amber-400 font-medium">
+                Vendor Offline
+              </span>
+            ) : stockStatus.status === 'out_of_stock' ? (
               <span className="text-red-600 dark:text-red-400 font-medium">
                 {stockStatus.message}
               </span>
@@ -465,15 +495,25 @@ export function ProductCard({
             )}
           </div>
         </div>
-        <div className="flex items-center justify-between pt-1">
-          {displayQuantity === 0 ? (
+        <div className="flex items-center justify-center pt-1">
+          {!isVendorOnline ? (
+            /* Vendor Offline State */
+            <div className="w-full px-3 py-1.5 rounded-xl text-center bg-amber-100 dark:bg-amber-900/30 border border-amber-300 dark:border-amber-700/50">
+              <div className="text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                Vendor Offline
+              </div>
+              <div className="text-[9px] text-amber-600 dark:text-amber-400 mt-0.5">
+                Check back soon
+              </div>
+            </div>
+          ) : displayQuantity === 0 ? (
             <motion.button
               onClick={handleAddToCart}
               disabled={!stockStatus.canOrder}
-              className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-[10px] font-medium transition-colors ${
+              className={`flex items-center justify-center gap-1 px-3 py-1.5 rounded-xl text-[10px] font-medium transition-colors w-full ${
                 !stockStatus.canOrder
                   ? 'bg-neutral-300 dark:bg-neutral-700 text-neutral-500 dark:text-neutral-400 cursor-not-allowed'
-                  : 'bg-neutral-100 dark:bg-neutral-800 text-black dark:text-white hover:bg-neutral-200 dark:hover:bg-neutral-700'
+                  : 'bg-neutral-100 dark:bg-neutral-100 text-white dark:text-black hover:bg-neutral-200 dark:hover:bg-neutral-200'
               }`}
               whileHover={stockStatus.canOrder ? { scale: 1.05 } : {}}
               whileTap={stockStatus.canOrder ? { scale: 0.95 } : {}}
@@ -482,7 +522,7 @@ export function ProductCard({
               {stockStatus.status === 'out_of_stock' ? 'Out of Stock' : 'Add'}
             </motion.button>
           ) : (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center justify-center gap-2 w-full">
               <motion.button
                 onClick={handleRemoveFromCart}
                 className="w-6 h-6 rounded-full bg-neutral-100 dark:bg-neutral-800 flex items-center justify-center hover:bg-neutral-200 dark:hover:bg-neutral-700 transition-colors"
@@ -492,7 +532,7 @@ export function ProductCard({
                 <Minus className="h-3 w-3 text-black dark:text-white" />
               </motion.button>
               
-              <span className="text-[12px] font-medium text-black dark:text-white min-w-[20px] text-center">
+              <span className="text-[14px] font-medium text-black dark:text-white min-w-[20px] text-center">
                 {displayQuantity}
               </span>
               

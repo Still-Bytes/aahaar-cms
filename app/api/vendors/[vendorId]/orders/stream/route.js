@@ -49,17 +49,17 @@ export async function GET(request, { params }) {
               include: [
                 {
                   model: User,
-                  as: "customer",
+                  as: "user",
                   attributes: ["fullName", "phone"],
                 },
                 {
                   model: Payment,
                   as: "payment",
-                  attributes: ["method", "status"],
+                  attributes: ["paymentMethod", "status"],
                 },
                 {
                   model: OrderItem,
-                  as: "items",
+                  as: "orderItems",
                   include: [
                     {
                       model: MenuItem,
@@ -76,16 +76,16 @@ export async function GET(request, { params }) {
             const transformedOrders = orders.map((order) => ({
               id: order.id,
               orderNumber: order.orderNumber,
-              customerName: order.customer?.fullName || "Unknown",
-              customerPhone: order.customer?.phone,
-              items: order.items?.map((item) => ({
+              customerName: order.user?.fullName || "Unknown",
+              customerPhone: order.user?.phone,
+              items: order.orderItems?.map((item) => ({
                 name: item.menuItem?.name || "Unknown Item",
                 quantity: item.quantity,
                 price: item.unitPrice,
               })) || [],
               totalAmount: order.totalAmount,
               status: order.status,
-              paymentMethod: order.payment?.method || "cash",
+              paymentMethod: order.payment?.paymentMethod || "cash",
               paymentStatus: order.payment?.status || "pending",
               specialInstructions: order.specialInstructions,
               createdAt: order.createdAt,
